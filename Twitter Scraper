@@ -1,0 +1,70 @@
+import pandas as pd
+from transformers import AutoModelForSequenceClassification, AutoTokenizer, AutoConfig
+import numpy as np
+from scipy.special import softmax
+
+# Load your dataset from CSV
+dataset_path = 'incident_twitter.csv'
+df = pd.read_csv(dataset_path, encoding='latin1')
+
+# Preprocess text (username and link placeholders)
+def preprocess(text):
+    new_text = []
+    for t in text.split(" "):
+        t = '@user' if t.startswith('@') and len(t) > 1 else t
+        t = 'http' if t.startswith('http') else t
+        new_text.append(t)
+    return " ".join(new_text)
+
+# Load sentiment analysis model
+MODEL = "cardiffnlp/twitter-roberta-base-sentiment-latest"
+tokenizer = AutoTokenizer.from_pretrained(MODEL)
+config = AutoConfig.from_pretrained(MODEL)
+model = AutoModelForSequenceClassification.from_pretrained(MODEL)
+
+# Create a dictionary to store sentiments for unique comments
+comment_sentiments = {}
+
+# Perform sentiment analysis on each tweet
+sentiments = []
+sentiment_scores = []
+sentiment_ranks = []
+
+for index, row in df.iterrows():
+    text = preprocess(row['p_content'])
+    
+    # Check if sentiment for this comment is already calculated
+    if text in comment_sentiments:
+        predicted_label = comment_sentiments[text]
+    else:
+        encoded_input = tokenizer(text, return_tensors='pt')
+        output = model(**encoded_input)
+        scores = output.logits[0].detach().numpy()
+        scores = softmax(scores)
+        ranking = np.argsort(scores)
+        ranking = ranking[::-1]
+        predicted_label = config.id2label[ranking[0]]
+        
+        # Store sentiment for this comment
+        comment_sentiments[text] = predicted_label
+    
+    sentiments.append(predicted_label)
+    sentiment_scores.append(scores.tolist())
+    sentiment_ranks.append(ranking.tolist())
+
+# Add sentiment columns to the DataFrame
+df['sentiment'] = sentiments
+df['sentiment_score'] = sentiment_scores
+df['sentiment_rank'] = sentiment_ranks
+
+# Check if sentiments are added correctly
+print(df[['sentiment', 'sentiment_score', 'sentiment_rank']])
+
+# Print the DataFrame to see if it looks correct
+print(df)
+
+# Save the DataFrame with sentiments to a new CSV file
+df.to_csv('incident_twitter_with_sentiments.csv', index=False)
+
+# Save the DataFrame with sentiments to an Excel file
+df.to_excel('incident_twitter_with_sentiments.xlsx', index=False, engine='openpyxl')
