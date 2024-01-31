@@ -1,0 +1,130 @@
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.common.exceptions import TimeoutException, NoSuchElementException
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.common.by import By
+from selenium import webdriver
+from bs4 import BeautifulSoup
+import pandas as pd
+import requests
+import time
+import re
+import os
+
+def Youtube_Scrapper(keyword):
+    options = Options()
+    options.add_argument("start-maximized")
+    options.add_experimental_option("excludeSwitches", ["enable-automation"])
+    options.add_experimental_option('useAutomationExtension', False)
+    options.add_argument('--incognito')
+    driver = webdriver.Chrome(options=options)
+    driver.get(f"https://www.youtube.com/results?search_query={keyword}")
+
+    time.sleep(5)
+
+    # Extract video URLs from search results
+    video_urls = []
+    for video in driver.find_elements(By.ID, 'thumbnail'):
+        url = video.get_attribute('href')
+        if url is not None:
+            video_urls.append(url)
+    print(video_urls)
+
+    # Extract data from each video URL
+    data = []
+    for video_url in video_urls:
+        if "watch" in video_url:
+            driver.get(video_url)
+            time.sleep(7.5)
+            l = 100
+            for i in range(40):
+                driver.execute_script(f"window.scrollTo(0, {l})")
+                time.sleep(1)
+                l += 100
+            soup = BeautifulSoup(driver.page_source, 'html.parser')
+            video_title = soup.find('meta', property='og:title')['content']
+            video_description = soup.find('meta', property='og:description')['content']
+            video_channel = soup.find('a', attrs={'class': 'yt-simple-endpoint style-scope yt-formatted-string'}).text
+
+            likes_tag = soup.find('like-button-view-model', attrs={'class': 'YtLikeButtonViewModelHost'})
+            likes = likes_tag.find('div', attrs={'class': 'yt-spec-button-shape-next__button-text-content'}).text
+
+            # Check if comment_count_tag is found before accessing its attributes
+            comment_count_tag = soup.find('div', attrs={'id': 'title', 'class': 'style-scope ytd-comments-header-renderer'})
+            comment_count_text = comment_count_tag.find('span', attrs={'class': 'style-scope yt-formatted-string'}).text.strip() if comment_count_tag else ''
+
+            comments_tag = soup.find('ytd-item-section-renderer', attrs={'class': 'style-scope ytd-comments', 'id': 'sections', 'section-identifier': "comment-item-section"} )
+            comments = comments_tag.find_all('yt-formatted-string', attrs={'id': 'content-text', 'slot': 'content', 'class':'style-scope ytd-comment-renderer'})
+            comment = [items.text for items in comments]
+
+            hashtags = [hashtag.text.strip() for hashtag in soup.find_all('a', class_='yt-simple-endpoint style-scope yt-formatted-string')]
+
+            data.append({
+                'keyword': keyword,
+                'video_title': video_title,
+                'video_channel': video_channel,
+                'video_url': video_url,
+                'video_description': video_description,
+                'hashtags': hashtags,
+                'like_count': likes,
+                'comment_count': comment_count_text,
+                'comments': comment
+             })
+
+        elif "shorts" in video_url:
+            pass
+            driver.get(video_url)
+            time.sleep(7.5)
+            driver.execute_script(f"window.scrollTo(0, 1080)")
+
+            soup = BeautifulSoup(driver.page_source, 'html.parser')
+            video_title = soup.find('meta', property='og:title')['content']
+            video_description = soup.find('meta', property='og:description')['content']
+            video_channel = soup.find('a', attrs={'class': 'yt-simple-endpoint style-scope yt-formatted-string'}).text
+            likes = soup.find('span', attrs={'class': 'yt-core-attributed-string yt-core-attributed-string--white-space-pre-wrap yt-core-attributed-string--text-alignment-center yt-core-attributed-string--word-wrapping'}).text
+            hashtags = [hashtag.text.strip() for hashtag in soup.find_all('a', class_='yt-simple-endpoint bold style-scope yt-formatted-string')]
+
+            # Click on the comment button
+            comment_button = driver.find_element(By.XPATH, '//*[@id="comments-button"]/ytd-button-renderer/yt-button-shape/label/button/yt-touch-feedback-shape/div')
+            comment_button.click()
+            time.sleep(7.5)
+            # # Scroll to the comment section
+            # comment_section = driver.find_element(By.XPATH, '//*[@id="contents"]')
+            # driver.execute_script("arguments[0].scrollIntoView(true);", comment_section)
+
+            comment_count_tag = soup.find('yt-formatted-string', attrs={'id': 'contextual-info', 'class': 'style-scope ytd-engagement-panel-title-header-renderer'})
+            comment_count = comment_count_tag.text if comment_count_tag else '0'
+            print(f"Comment Count: {comment_count}")
+
+            # comments_tag = soup.find('div', attrs={'class': ' style-scope ytd-item-section-renderer style-scope ytd-item-section-renderer', 'id': 'contents'} )
+            comments = soup.find_all('div', attrs={'id': 'comment-content', 'class':'style-scope ytd-comment-renderer'})
+            comment = [] 
+            for items in comments:
+                comment.append(items.text)
+                print(items.text.strip())
+
+            # Add data to list
+            data.append({
+                'keyword': keyword,
+                'video_title': video_title,
+                'video_channel': video_channel,
+                'video_url': video_url,
+                'video_description': video_description,
+                'hashtags': hashtags,
+                'like_count': likes,
+                'comment_count': comment_count,
+                'comments': comment
+            })
+
+    # Close WebDriver
+    driver.close()
+
+    # Convert data to DataFrame
+    df = pd.DataFrame(data)
+
+    return df
+
+keywords = ['Priyantha Kumara', 'jaranwala incident']
+for keyword in keywords:
+    data = Youtube_Scrapper(keyword)
+    data.to_csv('Youtube.csv', index=False)
