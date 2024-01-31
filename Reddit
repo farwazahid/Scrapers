@@ -1,0 +1,109 @@
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.common.exceptions import TimeoutException, NoSuchElementException
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.common.by import By
+from selenium import webdriver
+from bs4 import BeautifulSoup
+import time
+import pandas as pd  # Added import statement for pandas
+
+def Reddit_Scraper(keyword):
+    options = Options()
+    options.add_argument("start-maximized")
+    options.add_experimental_option("excludeSwitches", ["enable-automation"])
+    options.add_experimental_option('useAutomationExtension', False)
+    options.add_argument('--incognito')
+    
+    driver = webdriver.Chrome(options=options)
+    wait = WebDriverWait(driver, 2)  # Adjust the timeout as needed
+
+    driver.get(f"https://www.reddit.com/search/?q={keyword}")
+    time.sleep(5)
+
+    html = driver.page_source
+    soup = BeautifulSoup(html, 'html.parser')
+
+    links = []
+    url = soup.find_all('a', attrs={'class': 'absolute inset-0'})
+    for item in url:
+        relative_link = item['href']
+        link = f"https://www.reddit.com{relative_link}"
+        links.append(link)
+
+    data = []
+    for link in links:
+        try:
+            driver.get(link)
+            # Scroll down to load comments
+            l = 100
+            for i in range(40):
+                driver.execute_script(f"window.scrollTo(0, {l})")
+                time.sleep(0.5)
+                l += 100
+
+            try:
+                driver.find_element(By.CSS_SELECTOR, '#comment-tree > faceplate-partial > div:nth-child(2) > button').click()
+                for i in range(40):
+                    driver.execute_script(f"window.scrollTo(0, {l})")
+                    time.sleep(0.5)
+                    l += 100
+            except NoSuchElementException:
+                print("Button not found on:", link)
+
+            html = driver.page_source
+            soup = BeautifulSoup(html, 'html.parser')
+
+            # Try one selector for post title
+            post_title = soup.select_one('h1.font-semibold') or soup.select_one('h1')
+            
+            # Try selector for post creation dates
+            creation_date_element = soup.select_one('time[datetime]')
+                
+            # Try selector for post description
+            post_description_element = soup.find('div', attrs={'id': 't3_u6hrgt-post-rtjson-content'})
+
+            # Try selector for post upvote count
+            upvote_count_element = soup.find('faceplate-number', {'number': True})
+
+            # Try selector for comment count
+            comment_count_element = soup.find('shreddit-comment-tree', attrs={'id': 'comment-tree'})
+                
+            # Try selector for Comment text
+            comments = soup.find_all('div', attrs={'id': '-post-rtjson-content'})
+
+            data.append({
+                'keyword': keyword,
+                'post_title': post_title.text.strip() if post_title else '',
+                'Post_url': link,
+                'Description': post_description_element.text.strip() if post_description_element else '',
+                'Post_date': creation_date_element.get('title') if creation_date_element else '',
+                'Upvote_count': upvote_count_element.text.strip() if upvote_count_element else '',
+                'comment_count': comment_count_element.get('totalcomments') if comment_count_element else '0',
+                'comments': [item.text.strip() for item in comments[1:]] if comments else []
+            })
+
+        except Exception as e:
+            print(f"Error processing link: {link}")
+            print(e)
+            continue  # Skip to the next link if an error occurs
+
+    # Close WebDriver
+    driver.close()
+
+    # Convert data to DataFrame
+    df = pd.DataFrame(data)
+
+    return df
+
+# Example usage
+keywords = ["write_your_keyword_here"]
+final_df = pd.DataFrame()
+
+for keyword in keywords:
+    df = Reddit_Scraper(keyword)
+    final_df = pd.concat([final_df, df], ignore_index=True)
+
+    # Save to Excel with dynamic filename based on the keyword
+    file_name = f'{keyword}.xlsx'
+    final_df.to_excel(file_name, index=False)
