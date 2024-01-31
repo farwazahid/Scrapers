@@ -1,0 +1,80 @@
+from selenium.webdriver.chrome.options import Options
+from selenium import webdriver
+from bs4 import BeautifulSoup
+import time
+import re
+import pandas as pd
+
+def Website_Scrapper(url):
+    options = Options()
+    options.add_argument("start-maximized")
+    options.add_experimental_option("excludeSwitches", ["enable-automation"])
+    options.add_experimental_option('useAutomationExtension', False)
+    options.add_argument('--incognito')
+    driver = webdriver.Chrome(options=options)
+    
+    driver.get(url)
+    time.sleep(5)  # Wait for initial page load
+
+    # Scroll to the bottom of the page to load comments
+    driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
+    time.sleep(3)  # Wait for comments to load
+
+    # Click 'View More Comments' button until all comments are loaded
+    while True:
+        try:
+            view_more_button = driver.find_element_by_css_selector('.more-comments')
+            driver.execute_script("arguments[0].click();", view_more_button)
+            time.sleep(3)  # Wait for more comments to load
+        except:
+            break  # No more 'View More Comments' button found
+
+    html_content = driver.page_source
+    soup = BeautifulSoup(html_content, 'html.parser')
+
+    # Extracting the title, excerpt, author, date, and full editorial text
+    title = soup.find('h1').get_text()
+    excerpt = soup.find('p', {'class': 'story-excerpt'}).get_text()
+    author = soup.find('a', href=re.compile(r"/author/")).get_text(strip=True)
+    date = soup.find('span', string=re.compile(r"\b\d{4}\b")).get_text(strip=True)
+    editorial_content = soup.find('span', class_='story-text')
+    full_text = editorial_content.get_text(strip=True) if editorial_content else 'Editorial content not found'
+
+    # Extracting comments
+    comments = soup.find_all('div', class_='comments-info')
+    comments_text = [comment.get_text(strip=True) for comment in comments]
+    comments_count = len(comments_text)
+
+    driver.quit()
+
+    # Create a dictionary with the scraped data
+    data = {
+        'URL': url,
+        'Title': title,
+        'Excerpt': excerpt,
+        'Author': author,
+        'Date': date,
+        'Full Text': full_text,
+        'Comment Count': comments_count,
+        'Comments': comments_text
+    }
+
+    return data
+
+# Initialize an empty list to store scraped data
+data_list = []
+
+# List of URLs to scrape
+urls = ["https://tribune.com.pk/story/99055/salmaan-taseers-murder-the-death-of-reason", 
+        # Add more URLs here
+       ]
+
+for url in urls:
+    scraped_data = Website_Scrapper(url)
+    data_list.append(scraped_data)
+
+# Create a DataFrame from the list of dictionaries
+df = pd.DataFrame(data_list)
+
+# Save to Excel
+df.to_excel("Editorials.xlsx", index=False)
