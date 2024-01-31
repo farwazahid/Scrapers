@@ -1,0 +1,159 @@
+import socket
+from tiktokapipy.api import TikTokAPI, TikTokAPIError, TikTokAPIWarning
+import pandas as pd
+import os
+import moviepy.editor as mp
+import speech_recognition as sr
+import time
+from selenium import webdriver
+from selenium.webdriver.common.by import By
+from selenium.webdriver.chrome.options import Options
+
+def tiktok_search_by_keyword(keyword, max_videos=35, wait_time=10):
+    options = Options()
+    options.add_argument("--start-maximized")
+    options.add_argument("--disable-notifications")
+    driver = webdriver.Chrome(options=options)
+
+    video_urls = []
+    try:
+        driver.get("https://www.tiktok.com/login")
+        input("After logging in and completing any verification, press Enter in this console...")
+        driver.get(f"https://www.tiktok.com/search?q={keyword}")
+        time.sleep(5)
+
+        last_height = driver.execute_script("return document.body.scrollHeight")
+        while len(video_urls) < max_videos:
+            driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
+            time.sleep(3)
+
+            new_height = driver.execute_script("return document.body.scrollHeight")
+            if new_height == last_height:
+                break  # Break the loop if the page height has not changed
+            last_height = new_height
+
+            video_elements = driver.find_elements(By.XPATH, "//a[@href]")
+            current_video_urls = [el.get_attribute('href') for el in video_elements if 'video' in el.get_attribute('href')]
+            video_urls.extend(current_video_urls)
+            video_urls = list(set(video_urls))
+
+    except Exception as e:
+        print(f"Error during Selenium scraping: {e}")
+    finally:
+        driver.quit()
+
+    print(f"Waiting for {wait_time} seconds before starting scraping...")
+    time.sleep(wait_time)  # Wait for specified time before returning URLs
+
+    return video_urls[:max_videos]
+
+
+
+def download_tiktok_video(api, url, download_path, video_id):
+    new_download_path = os.path.join(download_path, f"{video_id}.mp4")
+    if os.path.exists(new_download_path):
+        print(f"File {new_download_path} already exists. Skipping download.")
+        return new_download_path
+    try:
+        video_data = api.video(url)
+        temp_download_path = video_data.download()
+        os.rename(temp_download_path, new_download_path)
+        return new_download_path
+    except Exception as e:
+        print(f"Error downloading video {url}: {e}")
+        return None
+
+def extract_audio(video_file):
+    try:
+        video = mp.VideoFileClip(video_file)
+        audio_file = 'extracted_audio.wav'
+        video.audio.write_audiofile(audio_file)
+        return audio_file
+    except Exception as e:
+        print(f"Error extracting audio from video: {e}")
+        return None
+
+def transcribe_audio(audio_file):
+    recognizer = sr.Recognizer()
+    if audio_file is None:
+        return "Error: Audio extraction failed"
+    try:
+        with sr.AudioFile(audio_file) as source:
+            audio_data = recognizer.record(source)
+        return recognizer.recognize_google(audio_data)
+    except sr.UnknownValueError:
+        return "Audio not understandable"
+    except sr.RequestError as e:
+        return f"Could not request results; {e}"
+
+def flatten_nested_lists(lst):
+    if all(isinstance(item, list) for item in lst):
+        return ['; '.join(map(str, item)) for item in lst]
+    return lst
+
+def scrape_for_keyword(keyword):
+    print("Starting scrape...")
+    video_urls = tiktok_search_by_keyword(keyword)
+    data = {
+        'Keyword': [],
+        'Video_ID': [],
+        'Unique_User_ID': [],
+        'Nicknames': [],
+        'Video_Description': [],
+        'Video_Likes_Count': [],
+        'Video_Shares_Count': [],
+        'Video_URL': [],
+        'Comment_Text': [],
+        'Transcribed_Text': []
+    }
+
+    for video_url in video_urls:
+        with TikTokAPI() as api:
+            try:
+                video_data = api.video(video_url)
+                
+                video_id = video_data.id if video_data else "Error"
+                unique_user_id = video_data.author.unique_id if video_data and video_data.author else "Error"
+                nickname = getattr(video_data.author, 'nickname', 'Not Available') if video_data and video_data.author else "Error"
+                video_description = video_data.desc if video_data else "Error"
+                likes_count = video_data.stats.digg_count if video_data and video_data.stats else 0
+                shares_count = video_data.stats.share_count if video_data and video_data.stats else 0
+                comments = [comment.text for comment in video_data.comments] if video_data and video_data.comments else ["No Comments"]
+
+                video_filename = download_tiktok_video(api, video_url, 'videos', video_id)
+                if video_filename:
+                    audio_file = extract_audio(video_filename)
+                    transcribed_text = transcribe_audio(audio_file)
+                else:
+                    transcribed_text = "Download Failed"
+
+            except Exception as e:
+                print(f"Error processing video {video_url}: {e}")
+                video_id, unique_user_id, nickname, video_description = "Error", "Error", "Error", "Error"
+                likes_count, shares_count, transcribed_text = 0, 0, "Error"
+
+            data['Keyword'].append(keyword)
+            data['Video_ID'].append(video_id)
+            data['Unique_User_ID'].append(unique_user_id)
+            data['Nicknames'].append(nickname)
+            data['Video_Description'].append(video_description)
+            data['Video_Likes_Count'].append(likes_count)
+            data['Video_Shares_Count'].append(shares_count)
+            data['Video_URL'].append(video_url)
+            data['Comment_Text'].append('; '.join(comments))
+            data['Transcribed_Text'].append(transcribed_text)
+
+    return pd.DataFrame(data)
+
+keywords = [ "Religious minorities", "Judicial process", "Blasphemy Trial", "Anti-blasphemy laws", "Sharia", "Islamic law", "Religious intolerance", "Extremism", "Vigilante justice", "Mob violence", "Mob justice", "Judicial system", "Rule of law", "International criticism", "Apostasy laws", "Defamation", "Religious defamation", "Media restrictions", "Cyber laws"
+]
+video_directory = 'videos'
+os.makedirs(video_directory, exist_ok=True)
+
+for kw in keywords:
+    df = scrape_for_keyword(kw)
+    csv_filename = f"{kw}.csv"
+    df.to_csv(csv_filename, index=False)
+    print(f"Data for keyword '{kw}' scraped successfully. Saved to {csv_filename}.")
+
+print("Script execution completed.")
